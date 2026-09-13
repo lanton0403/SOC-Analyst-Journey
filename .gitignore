@@ -1,0 +1,13 @@
+@"
+Wireshark-*-x64.exe
+*.zip
+NMap-Captures/
+
+*.pcap
+*.pcapng
+*.cap
+*.trace
+
+*.htm
+*.html
+"@ | Out-File -FilePath .gitignore -Encoding utf8
