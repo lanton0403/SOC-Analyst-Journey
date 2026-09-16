@@ -70,3 +70,36 @@ Select-Object TimeCreated,
               @{N='IP'; E={$_.Properties[18].Value}}
 
 ```
+
+---
+
+## 5. Sysmon Telemetry & Advanced Endpoint Visibility
+
+Sysmon bridges the visibility gap of standard Windows logs by capturing command-line parameters, parent-child process lineages, and process-level network sockets.
+
+### Key Sysmon Event IDs
+
+| Event ID | Event Name | Critical Fields | Threat Context |
+| :--- | :--- | :--- | :--- |
+| **1** | Process Creation | `CommandLine`, `ParentImage`, `ParentCommandLine`, `Hashes` | Reveals obfuscated CLI parameters (`-W Hidden`, `-enc`), LOLBins abuse, and suspicious parentage. |
+| **3** | Network Connection | `Image`, `DestinationIp`, `DestinationPort`, `Initiated` | Links local binaries directly to outbound network traffic (C2 beaconing, payload download). |
+| **11** | FileCreate | `Image`, `TargetFilename` | Detects dropped staging binaries in staging paths (`Temp`, `AppData`, `ProgramData`). |
+| **13** | RegistryEvent (Value Set) | `Image`, `TargetObject`, `Details` | Identifies persistence mechanisms targeting autostart keys (`Run`, `RunOnce`). |
+
+---
+
+## 6. Anti-Forensics: Log Tampering Detection
+
+Adversaries routinely clear security logs to blind responders during post-exploitation.
+
+| Event ID | Log Provider | Event Definition | Threat Significance |
+| :--- | :--- | :--- | :--- |
+| **1102** | Security | The audit log was cleared | High-severity alert; logs the user identity executing log wiping (`wevtutil cl Security`). |
+| **104** | System | The log file was cleared | Triggers when administrative users clear application, system, or custom service logs. |
+
+---
+
+## 7. Windows Security vs. Sysmon: Operational Boundary
+
+* **Windows Security Logs (Identity & Access):** Answers *WHO* logged on, *WHERE* they authenticated from, and *WHAT* privileges were granted (`4624`, `4625`, `4672`, `4720`).
+* **Sysmon Telemetry (Process & Behavior):** Answers *HOW* binaries executed, *WHAT* commands were typed, and *WHICH* network sockets/files were altered (`1`, `3`, `11`, `13`).
