@@ -103,3 +103,17 @@ Adversaries routinely clear security logs to blind responders during post-exploi
 
 * **Windows Security Logs (Identity & Access):** Answers *WHO* logged on, *WHERE* they authenticated from, and *WHAT* privileges were granted (`4624`, `4625`, `4672`, `4720`).
 * **Sysmon Telemetry (Process & Behavior):** Answers *HOW* binaries executed, *WHAT* commands were typed, and *WHICH* network sockets/files were altered (`1`, `3`, `11`, `13`).
+
+---
+
+## 8. Threat Hunting: Common Attack Techniques & Artifacts
+
+Threat hunting shifts from reactive alerting to proactive artifact discovery across identity, execution, and persistence vectors.
+
+### Core Attack Techniques & Detection Logic
+
+| Technique | MITRE ATT&CK | Core Detection Telemetry | Key Indicators & Detection Logic |
+| :--- | :--- | :--- | :--- |
+| **LSASS Memory Dumping** | T1003.001 | Sysmon ID 10 (`ProcessAccess`), ID 11 (`FileCreate`) | Untrusted process targeting `lsass.exe` requesting suspicious memory access rights (`GrantedAccess` masks like `0x1010` or `0x1FFFFF`). |
+| **PowerShell Obfuscation** | T1059.001 | Sysmon ID 1, Win Event 4104 (ScriptBlock) | CLI parameters attempting evasion (`-enc`, `-w hidden`, `-ep bypass`) paired with un-obfuscated script code captured in Event 4104. |
+| **Registry Run Persistence** | T1547.001 | Sysmon ID 13 (`RegistryEvent`) | Modification of autostart keys (`...\CurrentVersion\Run` or `RunOnce`) pointing to dropped payloads in staging folders (`Temp`, `AppData`). |
