@@ -117,3 +117,14 @@ Threat hunting shifts from reactive alerting to proactive artifact discovery acr
 | **LSASS Memory Dumping** | T1003.001 | Sysmon ID 10 (`ProcessAccess`), ID 11 (`FileCreate`) | Untrusted process targeting `lsass.exe` requesting suspicious memory access rights (`GrantedAccess` masks like `0x1010` or `0x1FFFFF`). |
 | **PowerShell Obfuscation** | T1059.001 | Sysmon ID 1, Win Event 4104 (ScriptBlock) | CLI parameters attempting evasion (`-enc`, `-w hidden`, `-ep bypass`) paired with un-obfuscated script code captured in Event 4104. |
 | **Registry Run Persistence** | T1547.001 | Sysmon ID 13 (`RegistryEvent`) | Modification of autostart keys (`...\CurrentVersion\Run` or `RunOnce`) pointing to dropped payloads in staging folders (`Temp`, `AppData`). |
+
+---
+
+## 9. Incident Triage Playbook Integration
+
+In an active investigation, triage correlates identity artifacts with process and behavioral telemetry across four standardized phases:
+
+* **Phase 1: Verification (Sysmon ID 1 & Threat Intel):** Validate command-line parameters (`-enc`, `-w hidden`), binary paths, and hash reputation via VirusTotal.
+* **Phase 2: Identity & Scope (Security IDs 4624 & 4672):** Trace user context, `LogonType` (Type 2 vs. Type 10), and asserted privileges (`SeDebugPrivilege`).
+* **Phase 3: Deep Execution Tracing (Sysmon IDs 3, 10, 13 & PowerShell 4104):** Capture unmasked script blocks, outbound C2 network sockets, LSASS handle access (`0x1010`), and persistence keys.
+* **Phase 4: Containment & Remediation:** Isolate the host at the network layer, terminate malicious PIDs, revoke active Kerberos TGT sessions, and block destination IPs on perimeter firewalls.
