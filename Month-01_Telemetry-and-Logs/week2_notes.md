@@ -1,13 +1,13 @@
 # Week 02: Windows Event Logs & Endpoint Triage
 
-An operational guide covering fundamental Windows Security Event IDs, authentication mechanics, and practical triage queries for SOC analysts.
+An operational guide covering fundamental Windows Security Event IDs, Sysmon telemetry, authentication mechanics, and practical Splunk/PowerShell triage queries for SOC analysts.
 
 ---
 
 ## 1. Core Security Event IDs
 
 | Event ID | Name | Critical Fields | Threat Context |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **4624** | An account was successfully logged on | `TargetUserName`, `LogonType`, `IpAddress`, `ElevatedToken` | Validates initial access, lateral movement, or unauthorized remote sessions. |
 | **4625** | An account failed to log on | `TargetUserName`, `Status`, `Substatus`, `IpAddress` | High volume indicates credential brute-forcing or password spraying. |
 | **4672** | Special privileges assigned to new logon | `SubjectUserName`, `PrivilegeList` (`SeDebugPrivilege`, `SeBackupPrivilege`) | Signals privilege escalation or initialization of high-integrity administrative sessions. |
@@ -71,6 +71,16 @@ Select-Object TimeCreated,
 
 ```
 
+### Splunk Operational Triage (SPL)
+
+```spl
+# Surface interactive and remote interactive logons
+index=wineventlog EventCode=4624 (LogonType=2 OR LogonType=10)
+| table _time, host, TargetUserName, LogonType, IpAddress, WorkstationName
+| sort - _time
+
+```
+
 ---
 
 ## 5. Sysmon Telemetry & Advanced Endpoint Visibility
@@ -80,29 +90,45 @@ Sysmon bridges the visibility gap of standard Windows logs by capturing command-
 ### Key Sysmon Event IDs
 
 | Event ID | Event Name | Critical Fields | Threat Context |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **1** | Process Creation | `CommandLine`, `ParentImage`, `ParentCommandLine`, `Hashes` | Reveals obfuscated CLI parameters (`-W Hidden`, `-enc`), LOLBins abuse, and suspicious parentage. |
 | **3** | Network Connection | `Image`, `DestinationIp`, `DestinationPort`, `Initiated` | Links local binaries directly to outbound network traffic (C2 beaconing, payload download). |
+| **10** | ProcessAccess | `SourceImage`, `TargetImage`, `GrantedAccess`, `CallTrace` | Detects credential scraping targeting sensitive processes (`lsass.exe`). |
 | **11** | FileCreate | `Image`, `TargetFilename` | Detects dropped staging binaries in staging paths (`Temp`, `AppData`, `ProgramData`). |
 | **13** | RegistryEvent (Value Set) | `Image`, `TargetObject`, `Details` | Identifies persistence mechanisms targeting autostart keys (`Run`, `RunOnce`). |
 
 ---
 
-## 6. Anti-Forensics: Log Tampering Detection
+## 6. Anti-Forensics & Script-Level Visibility
+
+### Log Tampering Detection
 
 Adversaries routinely clear security logs to blind responders during post-exploitation.
 
 | Event ID | Log Provider | Event Definition | Threat Significance |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **1102** | Security | The audit log was cleared | High-severity alert; logs the user identity executing log wiping (`wevtutil cl Security`). |
 | **104** | System | The log file was cleared | Triggers when administrative users clear application, system, or custom service logs. |
+
+### PowerShell Script Block Logging (Event ID 4104)
+
+While Sysmon ID 1 records initial obfuscated CLI flags, Windows PowerShell Event ID 4104 captures the actual, de-obfuscated script code executed in memory.
+
+**Enable Script Block Logging via PowerShell (Admin):**
+
+```powershell
+$path = "HKLM:\Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging"
+If (!(Test-Path $path)) { New-Item -Path $path -Force }
+Set-ItemProperty -Path $path -Name "EnableScriptBlockLogging" -Value 1 -Type DWord
+
+```
 
 ---
 
 ## 7. Windows Security vs. Sysmon: Operational Boundary
 
 * **Windows Security Logs (Identity & Access):** Answers *WHO* logged on, *WHERE* they authenticated from, and *WHAT* privileges were granted (`4624`, `4625`, `4672`, `4720`).
-* **Sysmon Telemetry (Process & Behavior):** Answers *HOW* binaries executed, *WHAT* commands were typed, and *WHICH* network sockets/files were altered (`1`, `3`, `11`, `13`).
+* **Sysmon Telemetry (Process & Behavior):** Answers *HOW* binaries executed, *WHAT* commands were typed, and *WHICH* network sockets/files/registry keys were altered (`1`, `3`, `10`, `11`, `13`).
 
 ---
 
@@ -113,10 +139,60 @@ Threat hunting shifts from reactive alerting to proactive artifact discovery acr
 ### Core Attack Techniques & Detection Logic
 
 | Technique | MITRE ATT&CK | Core Detection Telemetry | Key Indicators & Detection Logic |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **LSASS Memory Dumping** | T1003.001 | Sysmon ID 10 (`ProcessAccess`), ID 11 (`FileCreate`) | Untrusted process targeting `lsass.exe` requesting suspicious memory access rights (`GrantedAccess` masks like `0x1010` or `0x1FFFFF`). |
 | **PowerShell Obfuscation** | T1059.001 | Sysmon ID 1, Win Event 4104 (ScriptBlock) | CLI parameters attempting evasion (`-enc`, `-w hidden`, `-ep bypass`) paired with un-obfuscated script code captured in Event 4104. |
 | **Registry Run Persistence** | T1547.001 | Sysmon ID 13 (`RegistryEvent`) | Modification of autostart keys (`...\CurrentVersion\Run` or `RunOnce`) pointing to dropped payloads in staging folders (`Temp`, `AppData`). |
+
+### Threat Hunting SPL Queries
+
+#### Hunt: LSASS Process Access (T1003.001)
+
+```spl
+index=wineventlog EventCode=10 TargetImage="*\\lsass.exe"
+| where NOT match(SourceImage, "(?i)C:\\\\Windows\\\\System32\\\\(svchost|csrss|services|lsass)\.exe")
+| table _time, host, SourceImage, TargetImage, GrantedAccess, CallTrace
+| sort - _time
+
+```
+
+#### Hunt: Suspicious PowerShell CLI Flags (T1059.001)
+
+```spl
+index=wineventlog EventCode=1 Image="*\\powershell.exe"
+(CommandLine="*-enc*" OR CommandLine="*-EncodedCommand*" OR CommandLine="*-w hidden*" OR CommandLine="*-ep bypass*")
+| table _time, host, User, ParentImage, CommandLine, Hashes
+| sort - _time
+
+```
+
+#### Hunt: Rare Process Lineage / Long-tail Execution
+
+```spl
+index=wineventlog EventCode=1
+| stats count, values(CommandLine) as sample_command by Image
+| sort + count
+| head 10
+
+```
+
+#### Hunt: Registry Run Keys Modification (T1547.001)
+
+```spl
+index=wineventlog EventCode=13 TargetObject="*\\CurrentVersion\\Run*"
+| table _time, host, Image, TargetObject, Details
+| sort - _time
+
+```
+
+#### Hunt: Security/System Log Tampering (1102 / 104)
+
+```spl
+index=wineventlog (EventCode=1102 OR EventCode=104)
+| table _time, host, EventCode, SubjectUserName, Message
+| sort - _time
+
+```
 
 ---
 
@@ -127,4 +203,13 @@ In an active investigation, triage correlates identity artifacts with process an
 * **Phase 1: Verification (Sysmon ID 1 & Threat Intel):** Validate command-line parameters (`-enc`, `-w hidden`), binary paths, and hash reputation via VirusTotal.
 * **Phase 2: Identity & Scope (Security IDs 4624 & 4672):** Trace user context, `LogonType` (Type 2 vs. Type 10), and asserted privileges (`SeDebugPrivilege`).
 * **Phase 3: Deep Execution Tracing (Sysmon IDs 3, 10, 13 & PowerShell 4104):** Capture unmasked script blocks, outbound C2 network sockets, LSASS handle access (`0x1010`), and persistence keys.
-* **Phase 4: Containment & Remediation:** Isolate the host at the network layer, terminate malicious PIDs, revoke active Kerberos TGT sessions, and block destination IPs on perimeter firewalls.
+* **Phase 4: Containment & Remediation:** Isolate the host at the network layer, terminate malicious PIDs, revoke active Kerberos TGT sessions, disable unauthorized accounts created via Event 4720, and block destination IPs on perimeter firewalls.
+
+---
+
+## 10. Lab Verification Checklist
+
+* [ ] **Data Pipeline Operational:** Splunk Universal Forwarder running under `LocalSystem` with explicit channel SDDL access configured via `wevtutil`.
+* [ ] **Sysmon Telemetry Ingested:** Successfully ingested and verified Event ID 1 (Process Creation) in Splunk index.
+* [ ] **Account Persistence Audited:** Executed local user creation (`net user`) and verified Event ID 4720 alert generation.
+* [ ] **PowerShell ScriptBlock Logging Configured:** Enabled Event ID 4104 via Registry for script inspection.
